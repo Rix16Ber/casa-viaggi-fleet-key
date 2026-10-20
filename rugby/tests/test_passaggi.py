@@ -14,6 +14,7 @@ from rugby.cursor_rugby.rename_clips import rename_clips
 from rugby.cursor_rugby.setpiece import fill_set_piece
 from rugby.cursor_rugby.upload import publish
 from rugby.cursor_rugby.veo import prepare_export, refuse_remote_download
+from rugby.cursor_rugby.veo_public import download_public_match, list_recordings
 from rugby.cursor_rugby.xlsxutil import Workbook, chart_hashes, parse_rows, row_map
 from rugby.tests.factory import build_template
 
@@ -214,6 +215,148 @@ class MinutiTest(unittest.TestCase):
             rows = dict(line.split("\t") for line in dest.read_text(encoding="utf-8").splitlines()[1:])
             self.assertEqual(rows["Bonan"], "160")
             self.assertEqual(sum(int(value) for value in rows.values()), 15 * 80 * 2)
+
+
+class _VeoFinto:
+    def __init__(self, body_size: int | None = None):
+        self.body_size = body_size
+        self.downloads = 0
+
+    def recordings(self, club: str) -> list[dict]:
+        self.club = club
+        return [
+            {
+                "slug": "20261018-montebelluna-cus-padova",
+                "title": "Montebelluna - CUS Padova",
+                "start": "2026-10-18T12:00:00+02:00",
+                "team": "1° Squadra",
+            },
+            {
+                "slug": "20261003-partita",
+                "title": "Montebelluna Rugby",
+                "start": "2026-10-03T12:00:00+02:00",
+                "team": "1° Squadra",
+            },
+        ]
+
+    def match(self, slug: str) -> dict:
+        if slug.startswith("20261003"):
+            return {
+                "slug": slug,
+                "title": "Montebelluna Rugby",
+                "opponent_club_name": "Paese",
+                "start": "2026-10-03T12:00:00+02:00",
+            }
+        return {
+            "slug": slug,
+            "title": "Montebelluna - CUS Padova",
+            "opponent_club_name": "CUS Padova",
+            "start": "2026-10-18T12:00:00+02:00",
+        }
+
+    def videos(self, slug: str) -> list[dict]:
+        return [
+            {"render_type": "panorama", "mime_type": "video/mp4", "url": "https://cdn.test/panorama.mp4"},
+            {"render_type": "standard", "mime_type": "video/mp4", "url": "https://cdn.test/full.mp4"},
+        ]
+
+    def highlights(self, slug: str) -> list[dict]:
+        return [
+            {
+                "id": "dopo",
+                "start": 618,
+                "duration": 20,
+                "type": "lineout",
+                "team_association": "opponent",
+                "comment": "\u200bVinta",
+                "tags": [{"slug": "lineout"}],
+                "videos": [{"url": "https://cdn.test/clip-b.mp4"}],
+            },
+            {
+                "id": "prima",
+                "start": 11,
+                "duration": 15,
+                "type": "try_",
+                "team_association": "own",
+                "comment": "\u200b",
+                "tags": [{"slug": "try"}],
+                "videos": [{"url": "https://cdn.test/clip-a.mp4"}],
+            },
+            {
+                "id": "vuoto",
+                "start": 0,
+                "duration": 0,
+                "type": "half_start",
+                "team_association": None,
+                "comment": None,
+                "tags": [{"slug": "half-start"}],
+                "videos": [],
+            },
+        ]
+
+    def content_length(self, url: str) -> int:
+        if self.body_size is not None and url.endswith("full.mp4"):
+            return self.body_size
+        return len(self._body(url))
+
+    def download(self, url: str, dest: Path) -> None:
+        self.downloads += 1
+        dest.write_bytes(self._body(url))
+
+    def _body(self, url: str) -> bytes:
+        return {
+            "https://cdn.test/full.mp4": b"VIDEO",
+            "https://cdn.test/clip-a.mp4": b"A",
+            "https://cdn.test/clip-b.mp4": b"BB",
+        }[url]
+
+
+class VeoPublicTest(unittest.TestCase):
+    def test_scarica_il_follow_cam_e_le_clip(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            client = _VeoFinto()
+            source = "https://app.veo.co/clubs/montebelluna-rugby-club-1977/recordings/"
+            folder = download_public_match(source, root, "2026-10-18", "CUS Padova", root / "log.txt", client)
+            again = download_public_match(source, root, "18/10/2026", "CUS Padova", root / "log.txt", client)
+            self.assertEqual(folder, again)
+            self.assertEqual(client.downloads, 3)
+            self.assertEqual((folder / "video-intero.mp4").read_bytes(), b"VIDEO")
+            names = sorted(path.name for path in (folder / "Clip Veo").iterdir())
+            self.assertEqual(names, ["01 000011_-_try.mp4", "02 001018_-_lineout.mp4"])
+            table = (folder / "veo-highlight.csv").read_text(encoding="utf-8")
+            self.assertIn("Montebelluna", table)
+            self.assertIn("CUS Padova", table)
+            self.assertIn("Vinta", table)
+            self.assertNotIn("\u200b", table)
+            self.assertFalse((folder / "panorama.mp4").exists())
+            rows = list_recordings(source, root / "log.txt", client)
+            self.assertEqual(rows[0]["slug"], "20261018-montebelluna-cus-padova")
+
+    def test_si_ferma_senza_cartella(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            client = _VeoFinto(body_size=99)
+            with self.assertRaises(StepError):
+                download_public_match(
+                    "https://app.veo.co/clubs/montebelluna-rugby-club-1977/recordings/",
+                    root,
+                    "2026-10-18",
+                    "CUS Padova",
+                    root / "log.txt",
+                    client,
+                )
+            self.assertFalse(list(root.glob("*Montebelluna*")))
+            with self.assertRaises(StepError):
+                download_public_match(
+                    "https://app.veo.co/matches/20261018-montebelluna-cus-padova/",
+                    root,
+                    "2026-10-18",
+                    "Paese",
+                    root / "log.txt",
+                    client,
+                )
+            self.assertFalse(list(root.glob("*Montebelluna*")))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from rugby.cursor_rugby.rename_clips import rename_clips
 from rugby.cursor_rugby.setpiece import fill_set_piece
 from rugby.cursor_rugby.upload import publish
 from rugby.cursor_rugby.veo import prepare_export, refuse_remote_download
+from rugby.cursor_rugby.veo_public import download_public_match, list_recordings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,13 +25,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log", type=Path, default=Path("cursor-rugby.log"))
     sub = parser.add_subparsers(dest="command", required=True)
 
-    step1 = sub.add_parser("step1", help="controlla l'export Veo e prepara la cartella")
+    step1 = sub.add_parser("step1", help="prepara la cartella dal link pubblico o da un export")
+    step1.add_argument("--club")
     step1.add_argument("--export", type=Path)
     step1.add_argument("--url")
     step1.add_argument("--dest", type=Path, required=True)
     step1.add_argument("--data", required=True)
     step1.add_argument("--avversario", required=True)
     step1.add_argument("--lista", type=Path)
+
+    listed = sub.add_parser("elenco", help="elenca le partite pubbliche del club")
+    listed.add_argument("--club", required=True)
 
     step2 = sub.add_parser("step2", help="copia la cartella sul box e confronta gli sha256")
     step2.add_argument("--origine", type=Path, required=True)
@@ -88,12 +93,20 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace) -> None:
     command = args.command
-    if command == "step1":
-        if args.url and not args.export:
+    if command == "elenco":
+        for row in list_recordings(args.club, args.log):
+            print(f"{row['data']}\t{row['titolo']}\t{row['slug']}")
+    elif command == "step1":
+        public = args.club or (args.url if not args.export else "")
+        if public:
+            folder = download_public_match(public, args.dest, args.data, args.avversario, args.log)
+            print(folder)
+        elif args.url:
             refuse_remote_download(args.log, args.url)
-        if args.export is None or args.lista is None:
-            raise StepError("1", "servono --export e --lista. Senza l'export Veo il passaggio resta manuale.")
-        prepare_export(args.export, args.dest, args.data, args.avversario, args.lista, args.log)
+        elif args.export is None or args.lista is None:
+            raise StepError("1", "servono --club oppure --export e --lista.")
+        else:
+            prepare_export(args.export, args.dest, args.data, args.avversario, args.lista, args.log)
     elif command == "step2":
         copy_to_box(args.origine, args.box, folder_name(parse_date(args.data), args.avversario), args.log)
     elif command == "step4":
