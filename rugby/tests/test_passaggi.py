@@ -83,6 +83,24 @@ class VeoCopyRenameTest(unittest.TestCase):
                 refuse_remote_download(root / "log.txt", "https://app.veo.co/matches/esempio")
             self.assertIn("manuale", str(raised.exception))
 
+    def test_rinomina_da_orario_anche_senza_fase_gioco(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            clips = root / "clip"
+            clips.mkdir()
+            (clips / "01 000449_-_Touche.mp4").write_bytes(b"touche")
+            (clips / "video-intero.mp4").write_bytes(b"video")
+            table = root / "tabella-rinomina.csv"
+            table.write_text("inizio,nuovo_nome\n04:49,01 - Touche.mp4\n", encoding="utf-8")
+            log = root / "log.txt"
+            rename_clips(clips, table, log)
+            self.assertTrue((clips / "01 - Touche.mp4").is_file())
+            self.assertTrue((clips / "video-intero.mp4").is_file())
+            rename_clips(clips, table, log)
+            with self.assertRaises(StepError):
+                rename_clips(clips, root / "manca.csv", log)
+            self.assertIn("CSV assente", log.read_text(encoding="utf-8"))
+
 
 class WorkbookTest(unittest.TestCase):
     def test_file_fasi_setpiece_e_controlli(self):

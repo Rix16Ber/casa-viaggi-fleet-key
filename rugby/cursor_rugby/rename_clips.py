@@ -9,18 +9,22 @@ from pathlib import Path
 from rugby.cursor_rugby.clock import clock_key
 from rugby.cursor_rugby.errors import StepError
 from rugby.cursor_rugby.log import write_log
-from rugby.cursor_rugby.veo import clip_pattern_ok
+from rugby.cursor_rugby.veo import clip_clock
 
 _STEP = "4"
 
 
 def rename_clips(clip_dir: Path, table: Path, log_path: Path) -> Path:
     clip_dir = Path(clip_dir)
-    rows = _read_table(table)
-    clips = [path for path in clip_dir.iterdir() if path.is_file() and clip_pattern_ok(path.name)]
+    try:
+        rows = _read_table(table)
+    except StepError as exc:
+        write_log(log_path, _STEP, "errore", messaggio=exc.message)
+        raise
+    clips = [path for path in clip_dir.iterdir() if path.is_file() and clip_clock(path.name)]
     by_clock = {}
     for path in clips:
-        clock = path.name.split(" ", 1)[1].split("_-_", 1)[0]
+        clock = clip_clock(path.name)
         if clock in by_clock:
             _fail(log_path, f"due clip con lo stesso orario {clock}")
         by_clock[clock] = path

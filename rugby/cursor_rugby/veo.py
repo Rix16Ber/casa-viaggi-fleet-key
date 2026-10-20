@@ -6,6 +6,7 @@ Con l'export controlla i nomi, i byte e la lista delle clip.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -16,6 +17,16 @@ from rugby.cursor_rugby.xlsxutil import sha256_file
 
 _STEP = "1"
 CLIP_PREFIX = "Fase_Gioco.mp4"
+
+
+_CLIP_NAME = re.compile(r"^(\d{2,}) (\d{6})_-_.+\.mp4$", re.IGNORECASE)
+
+
+def clip_clock(name: str) -> str | None:
+    match = _CLIP_NAME.match(name)
+    if match is None:
+        return None
+    return match.group(2)
 
 
 def clip_pattern_ok(name: str) -> bool:
