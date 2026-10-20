@@ -83,16 +83,20 @@ def main(argv: list[str] | None = None) -> int:
     step11.add_argument("--dest", type=Path, required=True)
     step11.add_argument("--durata", type=int, default=80)
 
+    check = sub.add_parser("pre-consegna", help="controllo pre-consegna, sola lettura")
+    check.add_argument("file", type=Path)
+    check.add_argument("conteggi", type=Path)
+    check.add_argument("badge", nargs="?", type=Path)
+
     args = parser.parse_args(argv)
     try:
-        _run(args)
+        return _run(args) or 0
     except StepError as exc:
         print(exc, file=sys.stderr)
         return 1
-    return 0
 
 
-def _run(args: argparse.Namespace) -> None:
+def _run(args: argparse.Namespace) -> int:
     command = args.command
     if command == "elenco":
         for row in list_recordings(args.club, args.log):
@@ -126,6 +130,14 @@ def _run(args: argparse.Namespace) -> None:
         write_partite_row(args.file, args.dest, args.data, args.avversario, args.log, args.intestazione)
     elif command == "step11":
         summarize(args.sorgente, args.dest, args.log, args.durata)
+    elif command == "pre-consegna":
+        from rugby.check_partita import main as check_main
+
+        argv = [str(args.file), str(args.conteggi)]
+        if args.badge is not None:
+            argv.append(str(args.badge))
+        return check_main(argv, args.log)
+    return 0
 
 
 def _durations(path: Path) -> dict[str, int]:
