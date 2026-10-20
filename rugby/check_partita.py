@@ -5,11 +5,43 @@ import json
 import sys
 import csv
 import re
+import zipfile
 import openpyxl
 from datetime import datetime, timezone
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 _STEP = "pre-consegna"
+_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_SET_ALIAS = {
+    "tipo": "tipo",
+    "orario veo": "ora",
+    "orario": "ora",
+    "orario video": "ora",
+    "chi": "chi",
+    "chi rimessa": "chi",
+    "squadra": "chi",
+    "nota veo": "nota",
+    "nota": "nota",
+    "esito": "esito",
+    "esito conteggio": "conteggio",
+}
+_FASE_ALIAS = {
+    "n": "N",
+    "inizio": "Inizio",
+    "fine": "Fine",
+    "da dove": "Da dove",
+    "dove": "Dove",
+    "nota veo": "Nota Veo",
+    "nota": "Nota Veo",
+    "metri": "Metri",
+    "esito": "Esito",
+    "start set piece": "Start set piece",
+    "end set piece": "End set piece",
+    "comincia con": "Start set piece",
+    "finisce con": "End set piece",
+}
 
 
 def main(argv=None, log_path=None) -> int:
@@ -29,11 +61,8 @@ def _controlla(log_path: Path) -> int:
     res=[]
     def rep(stato,nome,det=''): res.append((stato,nome,det)); print(f'[{stato}] {nome}'+(f'\n      '+det.replace('\n','\n      ') if det else ''))
     T={'Monte':'PMA','Padova':'CUS'}
-    # ---- Set piece
-    sp=wb['Set piece']; rows=[]
-    for r in range(5,sp.max_row+1):
-        a=sp.cell(r,1).value
-        if a in ('Touche','Mischia'): rows.append(dict(r=r,tipo=a,ora=sp.cell(r,2).value,chi=sp.cell(r,3).value,esito=sp.cell(r,4).value,nota=sp.cell(r,6).value))
+    # ---- Set piece (colonne dal nome dell'intestazione, anche se ripetuta)
+    sp=wb['Set piece']; rows=_righe_set_piece(sp)
     V={x['tipo']:x for x in csv.DictReader(open(veo))}
     def n(x): return int(x) if x not in (None,'') else None
     print('== 1) Totali file vs Veo')
@@ -66,12 +95,15 @@ def _controlla(log_path: Path) -> int:
     rep('FAIL' if vu else 'PASS','Set piece Squadra/Nota Veo','\n'.join(vu))
     da=[f"{x['tipo']} {x['ora']} ({x['chi']})" for x in rows if not x['esito']]
     rep('INFO',f'Set piece Esito da compilare a Riccardo: {len(da)}','\n'.join(da))
-    fg=wb['Fasi Gioco']; H=[c.value for c in fg[1]]; ci={h:i for i,h in enumerate(H)}
-    F=[]
-    for r in range(2,fg.max_row+1):
-        row=[c.value for c in fg[r]]
-        if row[ci['N']] is None: continue
-        F.append(dict(zip(H,row)))
+    fg=_foglio_fasi(wb)
+    if fg is None:
+        rep('FAIL','Foglio fasi','mancano Fasi Gioco e Fasi PI')
+        F=[]
+    else:
+        F=_righe_fasi(fg)
+        if F is None:
+            rep('FAIL','Foglio fasi','manca la colonna N')
+            F=[]
     vu=[f"fase {x['N']} ({x['Inizio']}): "+'/'.join(k for k in ('Nota Veo','Metri','Esito') if x.get(k) in (None,'')) for x in F if any(x.get(k) in (None,'') for k in ('Nota Veo','Metri','Esito'))]
     rep('FAIL' if vu else 'PASS',f'Fasi Gioco Nota/Metri/Esito ({len(F)} fasi)','\n'.join(vu))
     print('== 3) Regole')
@@ -110,7 +142,7 @@ def _controlla(log_path: Path) -> int:
     for x in rows:
         d=str(x['esito'] or '').lower()
         if d=='calcio contro' or d=='calcio favore' or d=='calcio a favore':
-            ec=sp.cell(x['r'],5).value; att='persa' if 'contro' in d else 'vinta'
+            ec=x.get('conteggio'); att='persa' if 'contro' in d else 'vinta'
             if ec!=att: sc.append(f"{x['tipo']} {x['ora']}: D={x['esito']} conteggio={ec} atteso {att}")
     for x in F:
         e=str(x.get('End set piece') or '').lower()
@@ -129,11 +161,168 @@ def _controlla(log_path: Path) -> int:
         if str(x['Metri']).lower().rstrip('a').rstrip('o')!=att.lower().rstrip('a').rstrip('o'):
             mm.append(f"fase {x['N']}: {x.get('Da dove')} → {x.get('Dove')} atteso {att}, file {x['Metri']}")
     rep('FAIL' if mm else 'PASS','Metri coerenti con Da dove → Dove','\n'.join(mm))
+    print('== 4) calcChain')
+    chain=_problemi_calc_chain(f)
+    if chain:
+        rep('FAIL','calcChain','Excel chiede di riparare il file quando calcChain indica una cella senza formula o fuori dal foglio. Su Padova è successo: un file da riparare non si consegna.\n'+'\n'.join(chain))
+    else:
+        rep('PASS','calcChain','nessun riferimento orfano')
     fails = sum(s == "FAIL" for s, _, _ in res)
     warns = sum(s == "WARN" for s, _, _ in res)
     print('== ESITO:', 'FAIL' if fails else 'PASS', f"({fails} FAIL, {warns} WARN)")
     _log(log_path, "errore" if fails else "ok", fail=fails, warn=warns, file=str(f))
     return 1 if fails else 0
+
+
+def _norm_header(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _foglio_fasi(wb):
+    if "Fasi Gioco" in wb.sheetnames:
+        return wb["Fasi Gioco"]
+    if "Fasi PI" in wb.sheetnames:
+        return wb["Fasi PI"]
+    return None
+
+
+def _righe_set_piece(sp) -> list[dict]:
+    rows = []
+    columns: dict[str, int] = {}
+    for r in range(1, sp.max_row + 1):
+        values = [sp.cell(r, c).value for c in range(1, sp.max_column + 1)]
+        if any(_norm_header(value) == "tipo" for value in values):
+            columns = {}
+            for index, value in enumerate(values, start=1):
+                key = _SET_ALIAS.get(_norm_header(value))
+                if key:
+                    columns[key] = index
+            continue
+        if "tipo" not in columns:
+            continue
+        tipo = sp.cell(r, columns["tipo"]).value
+        if tipo not in ("Touche", "Mischia"):
+            continue
+
+        def take(name: str, row: int = r) -> object:
+            column = columns.get(name)
+            return sp.cell(row, column).value if column else None
+
+        rows.append(
+            dict(
+                r=r,
+                tipo=tipo,
+                ora=take("ora"),
+                chi=take("chi"),
+                esito=take("esito"),
+                nota=take("nota"),
+                conteggio=take("conteggio"),
+            )
+        )
+    return rows
+
+
+def _righe_fasi(fg) -> list[dict] | None:
+    header_row = None
+    headers: list = []
+    for r in range(1, min(fg.max_row, 8) + 1):
+        values = [fg.cell(r, c).value for c in range(1, fg.max_column + 1)]
+        norms = {_norm_header(value) for value in values}
+        if "da dove" in norms or ("n" in norms and "inizio" in norms):
+            header_row = r
+            headers = values
+            break
+    if header_row is None:
+        return None
+    present = {_norm_header(value) for value in headers}
+    index: dict[str, int] = {}
+    for position, value in enumerate(headers):
+        key = _norm_header(value)
+        if key == "nota" and "nota veo" in present:
+            continue
+        canon = _FASE_ALIAS.get(key)
+        if canon:
+            index[canon] = position
+    if "N" not in index:
+        return None
+    rows = []
+    width = fg.max_column
+    for r in range(header_row + 1, fg.max_row + 1):
+        values = [fg.cell(r, c).value for c in range(1, width + 1)]
+        if index["N"] >= len(values) or values[index["N"]] is None:
+            continue
+        rows.append({canon: values[position] if position < len(values) else None for canon, position in index.items()})
+    return rows
+
+
+def _problemi_calc_chain(path: str) -> list[str]:
+    problems = []
+    with zipfile.ZipFile(path) as book:
+        if "xl/calcChain.xml" not in book.namelist():
+            return problems
+        workbook = ET.fromstring(book.read("xl/workbook.xml"))
+        rels = ET.fromstring(book.read("xl/_rels/workbook.xml.rels"))
+        targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in rels}
+        by_id = {}
+        for sheet in workbook.findall(f"{_NS}sheets/{_NS}sheet"):
+            target = targets.get(sheet.attrib.get(_REL + "id"), "")
+            if target.startswith("/"):
+                target = target[1:]
+            elif not target.startswith("xl/"):
+                target = "xl/" + target
+            by_id[sheet.attrib.get("sheetId")] = (sheet.attrib.get("name"), target)
+        cache: dict[str, tuple[str, str | None, set[str]] | None] = {}
+
+        def info(sheet_id: str):
+            if sheet_id not in cache:
+                found = by_id.get(sheet_id)
+                if found is None or found[1] not in book.namelist():
+                    cache[sheet_id] = None
+                else:
+                    root = ET.fromstring(book.read(found[1]))
+                    dimension = root.find(f"{_NS}dimension")
+                    ref = dimension.attrib.get("ref") if dimension is not None else None
+                    formulas = {
+                        cell.attrib["r"]
+                        for cell in root.iter(f"{_NS}c")
+                        if cell.attrib.get("r") and cell.find(f"{_NS}f") is not None
+                    }
+                    cache[sheet_id] = (found[0], ref, formulas)
+            return cache[sheet_id]
+
+        last = None
+        for cell in ET.fromstring(book.read("xl/calcChain.xml")).findall(f"{_NS}c"):
+            ref = cell.attrib.get("r", "")
+            sheet_id = cell.attrib.get("i") or last
+            if cell.attrib.get("i"):
+                last = cell.attrib["i"]
+            found = info(sheet_id) if sheet_id else None
+            if found is None:
+                problems.append(f"{ref}: foglio {sheet_id} assente")
+                continue
+            name, dimension, formulas = found
+            if dimension and not _dentro_il_range(ref, dimension):
+                problems.append(f"{name}!{ref}: fuori dal range {dimension}")
+            elif ref not in formulas:
+                problems.append(f"{name}!{ref}: senza formula")
+    return problems
+
+
+def _dentro_il_range(ref: str, dimension: str) -> bool:
+    def parse(cell: str) -> tuple[int, int]:
+        match = re.match(r"([A-Z]+)(\d+)", cell.upper())
+        if match is None:
+            return 0, 0
+        column = 0
+        for char in match.group(1):
+            column = column * 26 + ord(char) - 64
+        return column, int(match.group(2))
+
+    start, _, end = dimension.partition(":")
+    left, top = parse(start)
+    right, bottom = parse(end or start)
+    column, row = parse(ref)
+    return min(left, right) <= column <= max(left, right) and min(top, bottom) <= row <= max(top, bottom)
 
 
 def _log(path: Path, status: str, **fields: object) -> None:
