@@ -19,10 +19,11 @@ from rugby.cursor_rugby.xlsxutil import Workbook, chart_hashes, parse_rows, row_
 from rugby.tests.factory import build_template
 
 FORMATION = (
-    "Montebelluna rugby 1977 : Bonan, Pellizzari M., Turchetto, Pellizzari F., "
-    "Battaglia (78' Ren), Marchesan, Fornarolo (20' Gatto), Boer (66' Gallina), "
-    "Brianese, Pellizzari T. (78' Dussin), Chiaramonte, Durante, Pizzo (57' Marsura), "
-    "Gazzola (57' Nascimben), Zaniol (49' Nicoletti). All. Menelle, Bosco."
+    "Montebelluna rugby 1977 : Giocatore A, Giocatore B, Giocatore C, Giocatore D, "
+    "Giocatore E (78' Giocatore F), Giocatore G, Giocatore H (20' Giocatore I), "
+    "Giocatore J (66' Giocatore K), Giocatore L, Giocatore M (78' Giocatore N), "
+    "Giocatore O, Giocatore P, Giocatore Q (57' Giocatore R), "
+    "Giocatore S (57' Giocatore T), Giocatore U (49' Giocatore V). All. Allenatore A, Allenatore B."
 )
 
 
@@ -217,21 +218,21 @@ class MinutiTest(unittest.TestCase):
     def test_somma_partite(self):
         played = parse_formation(FORMATION)
         self.assertEqual(sum(played.values()), 15 * 80)
-        self.assertEqual(played["Battaglia"], 78)
-        self.assertEqual(played["Ren"], 2)
+        self.assertEqual(played["Giocatore E"], 78)
+        self.assertEqual(played["Giocatore F"], 2)
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             first = root / "formazione.txt"
             first.write_text(FORMATION + "\n", encoding="utf-8")
             second = root / "minuti.csv"
             roster = [f"Giocatore {index}" for index in range(1, 16)]
-            roster[0] = "Bonan"
+            roster[0] = "Giocatore A"
             lines = ["giocatore,minuti"] + [f"{name},80" for name in roster]
             second.write_text("\n".join(lines) + "\n", encoding="utf-8")
             dest = summarize([first, second], root / "stagione.tsv", root / "log.txt")
             summarize([first, second], dest, root / "log.txt")
             rows = dict(line.split("\t") for line in dest.read_text(encoding="utf-8").splitlines()[1:])
-            self.assertEqual(rows["Bonan"], "160")
+            self.assertEqual(rows["Giocatore A"], "160")
             self.assertEqual(sum(int(value) for value in rows.values()), 15 * 80 * 2)
 
 
