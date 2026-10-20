@@ -59,14 +59,18 @@ class VeoCopyRenameTest(unittest.TestCase):
             copy_to_box(match.parent, root / "box", "261018 -Montebelluna - CUS Padova", log)
             table = root / "rinomina.csv"
             table.write_text(
-                "inizio,nuovo_nome\n01:08,01 - Calcio.mp4\n02:51,02 - Mischia.mp4\n",
+                "nome attuale,nome nuovo,orario video Veo,nota Veo\n"
+                "01 000108_-_Fase_Gioco.mp4,01 - Calcio.mp4,01:08,Calcio\n"
+                "02 000251_-_Fase_Gioco.mp4,02 - Mischia.mp4,02:51,Mischia\n",
                 encoding="utf-8",
             )
             rename_clips(box / "Fasi gioco", table, log)
             self.assertTrue((box / "Fasi gioco" / "01 - Calcio.mp4").is_file())
             rename_clips(box / "Fasi gioco", table, log)
+            mapping = (box / "Fasi gioco" / "rinomina-vecchio-nuovo.tsv").read_text(encoding="utf-8")
+            self.assertIn("01 - Calcio.mp4", mapping)
             undo = (box / "Fasi gioco" / "annulla-rinomina.sh").read_text(encoding="utf-8")
-            self.assertIn("01 - Calcio.mp4", undo)
+            self.assertIn("rinomina-vecchio-nuovo.tsv", undo)
 
     def test_file_vuoto_e_url(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -92,8 +96,15 @@ class VeoCopyRenameTest(unittest.TestCase):
             (clips / "01 000449_-_Touche.mp4").write_bytes(b"touche")
             (clips / "video-intero.mp4").write_bytes(b"video")
             table = root / "tabella-rinomina.csv"
-            table.write_text("inizio,nuovo_nome\n04:49,01 - Touche.mp4\n", encoding="utf-8")
+            table.write_text(
+                "nome attuale,nome nuovo,orario video Veo,nota Veo\n"
+                "01 000449_-_Touche.mp4,01 - Touche.mp4,04:49,Touche\n",
+                encoding="utf-8",
+            )
             log = root / "log.txt"
+            matched, orphans = rename_clips(clips, table, log, dry_run=True)
+            self.assertEqual((matched, orphans), (1, 0))
+            self.assertTrue((clips / "01 000449_-_Touche.mp4").is_file())
             rename_clips(clips, table, log)
             self.assertTrue((clips / "01 - Touche.mp4").is_file())
             self.assertTrue((clips / "video-intero.mp4").is_file())

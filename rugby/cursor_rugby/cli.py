@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     step4 = sub.add_parser("step4", help="rinomina le clip con il CSV di Coach")
     step4.add_argument("--clip", type=Path, required=True)
     step4.add_argument("--csv", type=Path, required=True)
+    step4.add_argument("--dry-run", action="store_true")
 
     step5 = sub.add_parser("step5", help="crea il riassunto dal modello")
     step5.add_argument("--modello", type=Path, required=True)
@@ -110,7 +111,9 @@ def _run(args: argparse.Namespace) -> None:
     elif command == "step2":
         copy_to_box(args.origine, args.box, folder_name(parse_date(args.data), args.avversario), args.log)
     elif command == "step4":
-        rename_clips(args.clip, args.csv, args.log)
+        matched, orphans = rename_clips(args.clip, args.csv, args.log, dry_run=args.dry_run)
+        print(f"ABBINAMENTI: {matched}")
+        print(f"ORFANI: {orphans}")
     elif command == "step5":
         create_match_file(args.modello, args.dest, args.avversario, parse_date(args.data), args.log)
     elif command == "step6":
